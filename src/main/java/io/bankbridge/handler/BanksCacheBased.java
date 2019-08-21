@@ -1,62 +1,81 @@
 package io.bankbridge.handler;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.bankbridge.model.BankModel;
+import io.bankbridge.model.BankModelList;
 import org.ehcache.Cache;
 import org.ehcache.CacheManager;
 import org.ehcache.config.builders.CacheConfigurationBuilder;
 import org.ehcache.config.builders.CacheManagerBuilder;
 import org.ehcache.config.builders.ResourcePoolsBuilder;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import io.bankbridge.model.BankModel;
-import io.bankbridge.model.BankModelList;
-import spark.Request;
-import spark.Response;
+import static io.bankbridge.utils.JacksonUtils.jacksonDataBind;
 
-public class BanksCacheBased {
+public class BanksCacheBased extends BankHandler {
 
 
-	public static CacheManager cacheManager;
+    /**
+     * An alias for the cache manager.
+     */
+    private static final String ALIAS = "banks";
 
-	public static void init() throws Exception {
-		cacheManager = CacheManagerBuilder
-				.newCacheManagerBuilder().withCache("banks", CacheConfigurationBuilder
-						.newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)))
-				.build();
-		cacheManager.init();
-		Cache cache = cacheManager.getCache("banks", String.class, String.class);
-		try {
-			BankModelList models = new ObjectMapper().readValue(
-					Thread.currentThread().getContextClassLoader().getResource("banks-v1.json"), BankModelList.class);
-			for (BankModel model : models.banks) {
-				cache.put(model.bic, model.name);
-			}
-		} catch (Exception e) {
-			throw e;
-		}
-	}
+    private static CacheManager cacheManager;
 
-	public static String handle(Request request, Response response) {
+    /**
+     * @see BankHandler#BankHandler(Version)
+     */
+    public BanksCacheBased(Version version) {
+        super(version);
+    }
 
-		List<Map> result = new ArrayList<>();
-		cacheManager.getCache("banks", String.class, String.class).forEach(entry -> {
-			Map map = new HashMap<>();
-			map.put("id", entry.getKey());
-			map.put("name", entry.getValue());
-			result.add(map);
-		});
-		try {
-			String resultAsString = new ObjectMapper().writeValueAsString(result);
-			return resultAsString;
-		} catch (JsonProcessingException e) {
-			throw new RuntimeException("Error while processing request");
-		}
+    /**
+     * @see Handleable#init()
+     */
+    public void init() {
+        //create cache
+        cacheManager = CacheManagerBuilder
+                .newCacheManagerBuilder().withCache(ALIAS, CacheConfigurationBuilder
+                        .newCacheConfigurationBuilder(String.class, String.class, ResourcePoolsBuilder.heap(10)))
+                .build();
+        cacheManager.init();
+        Cache cache = cacheManager.getCache(ALIAS, String.class, String.class);
 
-	}
+        //load banks in cache from resource json file.
+        try {
+            BankModelList models = new ObjectMapper()
+                    .readValue(Thread.currentThread().getContextClassLoader().getResource(version.getResourceName()),
+                            BankModelList.class);
+
+            for (BankModel model : models.banks) {
+                cache.put(model.bic, model.name);
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException("Error while processing request", e.getCause());
+        }
+    }
+
+    /**
+     * @see Handleable#handle()
+     */
+    public String handle() {
+        List<Map<String, String>> result = new ArrayList<>();
+
+        //get model from cache
+        cacheManager.getCache(ALIAS, String.class, String.class).forEach(entry -> {
+            Map<String, String> map = new HashMap<>();
+            map.put(BankModel.ID, entry.getKey());
+            map.put(BankModel.NAME, entry.getValue());
+            result.add(map);
+        });
+
+        return jacksonDataBind(result);
+    }
 
 }
